@@ -440,6 +440,25 @@ class DatabaseManager:
             'date': today_data.date.isoformat(),
             'today': today_data.to_dict(),
         }
+
+        # 提供用于指标计算/回测的历史数据（不直接用于 LLM 提示词，避免上下文膨胀）
+        try:
+            config = get_config()
+            history_days = max(int(getattr(config, "hist_days", 260)), 2)
+
+            with self.get_session() as session:
+                history_rows = session.execute(
+                    select(StockDaily)
+                    .where(StockDaily.code == code)
+                    .order_by(desc(StockDaily.date))
+                    .limit(history_days)
+                ).scalars().all()
+
+            history_rows = list(reversed(history_rows))
+            context['raw_data'] = [r.to_dict() for r in history_rows]
+        except Exception as e:
+            # 历史数据仅用于增强分析，失败不应阻断主流程
+            logger.debug(f"构建 {code} raw_data 失败: {e}")
         
         if yesterday_data:
             context['yesterday'] = yesterday_data.to_dict()
