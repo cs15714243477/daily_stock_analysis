@@ -9,6 +9,10 @@
 test_*.py
 !test_env.py
 
+# 单元测试（不包含敏感信息，允许提交）
+!tests/
+!tests/**/test_*.py
+
 # Python
 __pycache__/
 *.py[cod]
