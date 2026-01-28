@@ -966,6 +966,34 @@ class GeminiAnalyzer:
 **风险因素**：
 {chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
 """
+
+        # 添加波段增强指标（ATR/ADX/BOLL/RS）
+        if 'indicators' in context and isinstance(context['indicators'], dict):
+            ind = context['indicators']
+            boll = ind.get('boll') if isinstance(ind.get('boll'), dict) else {}
+
+            atr_14 = ind.get('atr_14')
+            adx_14 = ind.get('adx_14')
+            bw = boll.get('bandwidth')
+            rs_20 = ind.get('rs_20')
+            rs_60 = ind.get('rs_60')
+
+            atr_14_str = f"{atr_14:.2f}" if isinstance(atr_14, (int, float)) else "N/A"
+            adx_14_str = f"{adx_14:.2f}" if isinstance(adx_14, (int, float)) else "N/A"
+            bw_str = f"{bw:.2f}" if isinstance(bw, (int, float)) else "N/A"
+            rs_20_str = f"{rs_20 * 100:.2f}%" if isinstance(rs_20, (int, float)) else "N/A"
+            rs_60_str = f"{rs_60 * 100:.2f}%" if isinstance(rs_60, (int, float)) else "N/A"
+
+            prompt += f"""
+### 波段增强指标（ATR/ADX/BOLL/RS）
+| 指标 | 数值 | 解读 |
+|------|------|------|
+| ATR(14) | {atr_14_str} | 波动率/止损参考（越大波动越大） |
+| ADX(14) | {adx_14_str} | 趋势强度（>25 通常更偏趋势） |
+| BOLL 带宽 | {bw_str} | 收敛(低) vs 扩张(高) |
+| RS(20) | {rs_20_str} | 相对强弱（20日超额） |
+| RS(60) | {rs_60_str} | 相对强弱（60日超额） |
+"""
         
         # 添加昨日对比数据
         if 'yesterday' in context:

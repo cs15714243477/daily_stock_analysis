@@ -66,6 +66,9 @@ class StockAnalysisPipeline:
         self.trend_analyzer = StockTrendAnalyzer()  # 趋势分析器
         self.analyzer = GeminiAnalyzer()
         self.notifier = NotificationService(source_message=source_message)
+
+        # 缓存：基准指数/ETF历史数据，用于相对强弱 (RS) 计算
+        self._benchmark_history_df = None
         
         # 初始化搜索服务
         self.search_service = SearchService(
@@ -335,6 +338,53 @@ class StockAnalysisPipeline:
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
             }
+
+        # 添加波段增强指标（ATR/ADX/BOLL/RS）
+        try:
+            raw_data = enhanced.get('raw_data')
+            if isinstance(raw_data, list) and raw_data:
+                import pandas as pd
+
+                from src.indicators import (
+                    compute_atr,
+                    compute_adx,
+                    compute_bollinger,
+                    compute_relative_strength,
+                )
+
+                hist_df = pd.DataFrame(raw_data)
+                if 'date' in hist_df.columns:
+                    hist_df = hist_df.sort_values('date').reset_index(drop=True)
+
+                atr_14 = compute_atr(hist_df, period=14).iloc[-1]
+                adx_14 = compute_adx(hist_df, period=14).iloc[-1]
+                boll = compute_bollinger(hist_df, window=20, num_std=2).iloc[-1]
+
+                indicators = {
+                    'atr_14': float(atr_14) if pd.notna(atr_14) else None,
+                    'adx_14': float(adx_14) if pd.notna(adx_14) else None,
+                    'boll': {
+                        'mid': float(boll.get('boll_mid')) if pd.notna(boll.get('boll_mid')) else None,
+                        'upper': float(boll.get('boll_upper')) if pd.notna(boll.get('boll_upper')) else None,
+                        'lower': float(boll.get('boll_lower')) if pd.notna(boll.get('boll_lower')) else None,
+                        'bandwidth': float(boll.get('boll_bandwidth')) if pd.notna(boll.get('boll_bandwidth')) else None,
+                    },
+                }
+
+                # 相对强弱（基准历史数据在 run() 中预取并缓存）
+                if self._benchmark_history_df is not None:
+                    rs = compute_relative_strength(
+                        hist_df[['date', 'close']].copy(),
+                        self._benchmark_history_df[['date', 'close']].copy(),
+                        windows=(20, 60),
+                        date_col='date',
+                        close_col='close',
+                    )
+                    indicators.update(rs)
+
+                enhanced['indicators'] = indicators
+        except Exception as e:
+            logger.debug(f"[指标] 构建增强指标失败: {e}")
         
         return enhanced
     
@@ -433,7 +483,46 @@ class StockAnalysisPipeline:
             # 捕获所有异常，确保单股失败不影响整体
             logger.exception(f"[{code}] 处理过程发生未知异常: {e}")
             return None
-    
+
+    def _prefetch_benchmark_history(self) -> None:
+        """
+        预取基准历史数据（用于相对强弱 RS 计算）
+
+        说明：
+        - 基准默认是指数代码（如 000300），但部分数据源可能不支持指数。
+        - 失败时仅降级为“不计算 RS”，不影响主流程。
+        """
+        benchmark_code = getattr(self.config, "benchmark_code", "") or ""
+        benchmark_code = benchmark_code.strip()
+        if not benchmark_code:
+            return
+
+        try:
+            # 尝试获取并落库（断点续传：若今日已有则跳过）
+            self.fetch_and_save_stock_data(benchmark_code)
+        except Exception as e:
+            logger.warning(f"[基准] {benchmark_code} 获取失败，将跳过 RS 计算: {e}")
+
+        try:
+            ctx = self.db.get_analysis_context(benchmark_code)
+            raw_data = ctx.get("raw_data") if isinstance(ctx, dict) else None
+            if not isinstance(raw_data, list) or not raw_data:
+                self._benchmark_history_df = None
+                return
+
+            import pandas as pd
+
+            df = pd.DataFrame(raw_data)
+            if 'date' in df.columns:
+                df = df.sort_values('date').reset_index(drop=True)
+
+            # 只保留 RS 需要的字段，减少内存占用
+            cols = [c for c in ['date', 'close'] if c in df.columns]
+            self._benchmark_history_df = df[cols].copy() if cols else None
+        except Exception as e:
+            logger.debug(f"[基准] {benchmark_code} 构建缓存失败: {e}")
+            self._benchmark_history_df = None
+
     def run(
         self, 
         stock_codes: Optional[List[str]] = None,
@@ -471,6 +560,9 @@ class StockAnalysisPipeline:
         logger.info(f"===== 开始分析 {len(stock_codes)} 只股票 =====")
         logger.info(f"股票列表: {', '.join(stock_codes)}")
         logger.info(f"并发数: {self.max_workers}, 模式: {'仅获取数据' if dry_run else '完整分析'}")
+
+        # 预取基准历史数据（用于 RS 计算，不影响主流程）
+        self._prefetch_benchmark_history()
         
         # === 批量预取实时行情（优化：避免每只股票都触发全量拉取）===
         # 只有股票数量 >= 5 时才进行预取，少量股票直接逐个查询更高效
