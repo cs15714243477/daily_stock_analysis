@@ -150,3 +150,67 @@ def grid_search(
             results.append(summary)
     return results
 
+
+def _parse_float_list(csv: str) -> list[float]:
+    items = []
+    for part in (csv or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        items.append(float(part))
+    return items
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    from src.config import get_config
+    from src.storage import get_db
+
+    parser = argparse.ArgumentParser(description="Backtest calibrator (starter)")
+    parser.add_argument("--code", help="Single stock code to calibrate (defaults to STOCK_LIST)")
+    parser.add_argument("--hold-days", type=int, default=20, help="Holding days for time-exit (default: 20)")
+    parser.add_argument("--adx", default="20,25,30", help="ADX thresholds CSV (default: 20,25,30)")
+    parser.add_argument("--atr", default="1.5,2.0,2.5", help="ATR stop multipliers CSV (default: 1.5,2.0,2.5)")
+
+    args = parser.parse_args(argv)
+
+    cfg = get_config()
+    db = get_db()
+
+    codes = [args.code] if args.code else list(getattr(cfg, "stock_list", []) or [])
+    if not codes:
+        print("No codes provided (set STOCK_LIST or pass --code).")
+        return 1
+
+    adx_thresholds = _parse_float_list(args.adx)
+    atr_stop_ks = _parse_float_list(args.atr)
+
+    for code in codes:
+        ctx = db.get_analysis_context(code)
+        raw = ctx.get("raw_data") if isinstance(ctx, dict) else None
+        if not isinstance(raw, list) or not raw:
+            print(f"[{code}] no history in DB (run pipeline with HIST_DAYS first).")
+            continue
+
+        df = pd.DataFrame(raw)
+        results = grid_search(
+            df,
+            adx_thresholds=adx_thresholds,
+            atr_stop_ks=atr_stop_ks,
+            hold_days=int(args.hold_days),
+        )
+        results = sorted(results, key=lambda r: (r.get("avg_return", 0.0), r.get("win_rate", 0.0)), reverse=True)
+
+        print(f"\n[{code}] top params (by avg_return then win_rate):")
+        for row in results[:5]:
+            print(
+                f"  ADX>={row['adx_trend_threshold']}, ATR*k={row['atr_stop_k']} | "
+                f"trades={row['trades']}, win_rate={row['win_rate']:.2%}, avg_ret={row['avg_return']:.3%}"
+            )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
