@@ -140,3 +140,53 @@ def compute_adx(
     # ADX is bounded in [0, 100] by definition; numerical noise may exceed slightly.
     return adx.clip(lower=0.0, upper=100.0)
 
+
+def compute_relative_strength(
+    stock_df: pd.DataFrame,
+    benchmark_df: pd.DataFrame,
+    *,
+    windows: tuple[int, ...] = (20, 60),
+    date_col: str = "date",
+    close_col: str = "close",
+    benchmark_close_col: str | None = None,
+) -> dict[str, float | None]:
+    """
+    Compute relative strength (out/under-performance) vs a benchmark.
+
+    For each window w, computes:
+      RS_w = ( (S_t / S_{t-w}) / (B_t / B_{t-w}) ) - 1
+
+    Returns latest RS values as a dict, e.g. {"rs_20": 0.12, "rs_60": -0.03}.
+    If insufficient history exists, value is None.
+    """
+    if benchmark_close_col is None:
+        benchmark_close_col = close_col
+
+    s = stock_df[[date_col, close_col]].copy()
+    b = benchmark_df[[date_col, benchmark_close_col]].copy()
+
+    s[date_col] = pd.to_datetime(s[date_col], errors="coerce")
+    b[date_col] = pd.to_datetime(b[date_col], errors="coerce")
+
+    merged = pd.merge(s, b, on=date_col, how="inner", suffixes=("_s", "_b")).sort_values(date_col)
+    if merged.empty:
+        return {f"rs_{w}": None for w in windows}
+
+    s_close = pd.to_numeric(merged[f"{close_col}_s"], errors="coerce")
+    b_close = pd.to_numeric(merged[f"{benchmark_close_col}_b"], errors="coerce")
+
+    out: dict[str, float | None] = {}
+    for w in windows:
+        if w <= 0:
+            raise ValueError("windows must be > 0")
+
+        s_ratio = s_close / s_close.shift(w)
+        b_ratio = b_close / b_close.shift(w)
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rs = (s_ratio / b_ratio.replace(0, np.nan)) - 1.0
+
+        last = rs.iloc[-1]
+        out[f"rs_{w}"] = float(last) if pd.notna(last) else None
+
+    return out
