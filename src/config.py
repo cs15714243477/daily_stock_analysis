@@ -126,6 +126,12 @@ class Config:
     schedule_time: str = "18:00"              # 每日推送时间（HH:MM 格式）
     market_review_enabled: bool = True        # 是否启用大盘复盘
 
+    # === 波段分析/回测配置 ===
+    # 历史日线长度（交易日），波段 1–4 周建议 >= 260（至少覆盖 MA60/ADX/波动率的稳定计算）
+    hist_days: int = 260
+    # 相对强弱基准（默认沪深300指数；若数据源不支持指数，可改为 510300 等ETF）
+    benchmark_code: str = "000300"
+
     # === 实时行情增强数据配置 ===
     # 实时行情开关（关闭后使用历史收盘价进行分析）
     enable_realtime_quote: bool = True
@@ -334,6 +340,8 @@ class Config:
             schedule_enabled=os.getenv('SCHEDULE_ENABLED', 'false').lower() == 'true',
             schedule_time=os.getenv('SCHEDULE_TIME', '18:00'),
             market_review_enabled=os.getenv('MARKET_REVIEW_ENABLED', 'true').lower() == 'true',
+            hist_days=int(os.getenv('HIST_DAYS', '260')),
+            benchmark_code=os.getenv('BENCHMARK_CODE', '000300'),
             webui_enabled=os.getenv('WEBUI_ENABLED', 'false').lower() == 'true',
             webui_host=os.getenv('WEBUI_HOST', '127.0.0.1'),
             webui_port=int(os.getenv('WEBUI_PORT', '8000')),
