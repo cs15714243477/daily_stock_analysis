@@ -67,3 +67,6 @@ local/
 run.sh
 
 verify_*.py
+
+# Git worktrees (local-only)
+.worktrees/
